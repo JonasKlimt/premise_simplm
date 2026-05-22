@@ -16,6 +16,7 @@ from collections import defaultdict
 import country_converter as coco
 import numpy as np
 import pandas as pd
+import xarray as xr
 import yaml
 
 from .export import biosphere_flows_dictionary
@@ -31,6 +32,9 @@ from .transformation import (
 )
 from .utils import DATA_DIR
 from .validation import MetalsValidation
+
+# import external module function to modify mineral raw material inventories
+from simplm_parametrization import parametrize_inventories
 
 logger = create_logger("metal")
 
@@ -344,6 +348,7 @@ def _update_metals(scenario, version, system_model):
     )
 
     metals.create_metal_markets()
+    metals.apply_iam_driven_inventory_adjustments()
     metals.update_metals_use_in_database()
     metals.relink_datasets()
     scenario["database"] = metals.database
@@ -1276,6 +1281,145 @@ class Metals(BaseTransformation):
 
         self.prim_sec_split = load_primary_secondary_split()
         self.secondary_activity_routes = load_secondary_activity_routes()
+
+    def apply_iam_driven_inventory_adjustments(self):
+        """
+        This collects the IAM variables needed to update the metal inventory improvements
+        and calls the external function to update the database.
+        """
+
+        self.combined_storage = {
+            "scenario": {
+                "model": self.model,
+                "pathway": self.scenario,
+                "year": int(self.year),
+            },
+            "iam_data": self.extract_iam_variables(),
+            "region_mapping": {
+                region: self.geo.iam_to_ecoinvent_location(region)
+                for region in self.geo.iam_regions
+            },
+            # a variable containing ore grade exctraction curves for each metal should be added here
+        }
+
+        # Call external parametrized model to modify database
+        parametrize_inventories(fg_db=self.database, iam_data=self.combined_storage)
+        
+
+    @staticmethod
+    def _select_vars(values, include=(), exclude=()):
+        return [
+            v
+            for v in values
+            if all(token in str(v) for token in include)
+            and all(token not in str(v) for token in exclude)
+        ]
+
+    @staticmethod
+    def _share(data, year, num_var, den_vars):
+        selected = data.sel(year=year)
+        denominator = selected.sel(variables=den_vars).sum("variables")
+        return xr.where(denominator > 0, selected.sel(variables=num_var) / denominator, 0.0)
+
+    def _share_change(self, data, target_year, base_year, num_var, den_vars):
+        target_share = self._share(data, target_year, num_var, den_vars)
+        base_share = self._share(data, base_year, num_var, den_vars)
+        return xr.where(base_share > 0, target_share - base_share, 0.0)
+
+    def extract_iam_variables(self):
+        """
+        Extract IAM indicators used as proxies to find parameter assumptions for 
+        metal inventory improvements.
+        """
+
+        target_year = self.year
+        base_year = 2020
+
+        # Steel BOF/BF efficiencies
+        steel_raw = (
+            self.iam_data.steel_technology_efficiencies
+            .sel(variables="steel - primary - BF/BOF", year=target_year)
+            .squeeze(drop=True)
+        )
+        steel = xr.where(steel_raw > 0, 1 - (1 / steel_raw), 0.0).assign_coords(
+            variables="Steel BF/BOF efficiency"
+        )
+
+        # Wind and solar shares in electricity mix
+        renewables = (
+            self.iam_data.electricity_mix
+            .sel(year=target_year, variables=["Wind Onshore", "Wind Offshore", "Solar CSP"])
+            .sum("variables")
+            .assign_coords(variables="Wind and PV renewable shares in electricity mix")
+        )
+
+        # Electric truck share in road freight, for the highest weight class available (currently 40t)
+        fleet = self.iam_data.road_freight_fleet
+        vars_40t = self._select_vars(
+            fleet.coords["variables"].values,
+            include=["40 metric ton"],
+        )
+        fleet_share = self._share(
+            fleet,
+            target_year,
+            "truck, battery electric, 40 metric ton",
+            vars_40t,
+        ).assign_coords(variables="Electric truck share (highest weight class)")
+
+        # Changes in electricity and hydrogen shares of final energy use in other industry sectors
+        final_energy = self.iam_data.final_energy_use
+        other_industry_vars = self._select_vars(
+            final_energy.coords["variables"].values,
+            include=["Industry - Other"],
+            exclude=[","],
+        )
+
+        elec_change = self._share_change(
+            final_energy,
+            target_year,
+            base_year,
+            "Industry - Other - Elec",
+            other_industry_vars,
+        ).assign_coords(variables="Electricity share other industry")
+
+        h2_change = self._share_change(
+            final_energy,
+            target_year,
+            base_year,
+            "Industry - Other - H2",
+            other_industry_vars,
+        ).assign_coords(variables="Hydrogen share other industry")
+
+        # Changes in solid biomass share of solid final energy use in other industry sectors
+        solid_vars = self._select_vars(
+            final_energy.coords["variables"].values,
+            include=["Industry - Other - Solid"],
+        )
+
+        bio_target = self._share(
+            final_energy,
+            target_year,
+            "Industry - Other - Solid Biomass",
+            solid_vars,
+        )
+        bio_base = self._share(
+            final_energy,
+            base_year,
+            "Industry - Other - Solid Biomass",
+            solid_vars,
+        )
+        biomass_change = xr.where(bio_target > bio_base, bio_target - bio_base, 0.0).assign_coords(
+            variables="Solid biomass share other industry"
+        )
+
+        arrays = [steel, renewables, fleet_share, elec_change, h2_change, biomass_change]
+
+        return xr.concat(
+            [arr.drop_vars("year", errors="ignore") for arr in arrays],
+            dim="variables",
+        )
+
+
 
     def update_metals_use_in_database(self):
         """
