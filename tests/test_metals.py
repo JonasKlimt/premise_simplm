@@ -186,7 +186,7 @@ def test_apply_simplm_parametrization_rejects_invalid_return_type(monkeypatch):
         metals_module.apply_simplm_parametrization([], {"scenario": {"year": 2030}})
 
 
-def test_apply_iam_driven_inventory_adjustments_assigns_adapter_result(monkeypatch):
+def test_apply_iam_driven_inventory_adjustments_reindexes_adapter_result(monkeypatch):
     class DummyGeo:
         iam_regions = ["World"]
 
@@ -203,21 +203,29 @@ def test_apply_iam_driven_inventory_adjustments_assigns_adapter_result(monkeypat
 
     returned_database = [{"name": "returned"}]
     captured = {}
+    calls = []
 
     def fake_apply_simplm_parametrization(database, iam_payload):
+        calls.append("apply_simplm_parametrization")
         captured["database"] = database
         captured["iam_payload"] = iam_payload
         return returned_database
+
+    def fake_build_db_indexes():
+        calls.append("build_db_indexes")
+        assert metals.database is returned_database
 
     monkeypatch.setattr(
         metals_module,
         "apply_simplm_parametrization",
         fake_apply_simplm_parametrization,
     )
+    metals.build_db_indexes = fake_build_db_indexes
 
     metals.apply_iam_driven_inventory_adjustments()
 
     assert metals.database is returned_database
+    assert calls == ["apply_simplm_parametrization", "build_db_indexes"]
     assert captured["database"] == [{"name": "original"}]
     assert captured["iam_payload"] == {
         "scenario": {"model": "image", "pathway": "SSP2-Base", "year": 2030},

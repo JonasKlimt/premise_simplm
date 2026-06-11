@@ -1398,6 +1398,7 @@ class Metals(BaseTransformation):
         self.database = apply_simplm_parametrization(
             self.database, self.combined_storage
         )
+        self.build_db_indexes()
 
     @staticmethod
     def _select_vars(values, include=(), exclude=()):
