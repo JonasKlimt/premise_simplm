@@ -355,6 +355,29 @@ def _load_simplm_parametrize_inventories():
     return parametrize_inventories
 
 
+def apply_simplm_parametrization(database, iam_payload):
+    """
+    Apply SIMPLM mineral inventory parametrization and return the updated database.
+
+    SIMPLM currently mutates Wurst databases in place, but accepting an explicit
+    returned list keeps the integration stable if SIMPLM changes that contract.
+    """
+
+    parametrize_inventories = _load_simplm_parametrize_inventories()
+    result = parametrize_inventories(fg_db=database, iam_data=iam_payload)
+
+    if result is None:
+        return database
+
+    if isinstance(result, list):
+        return result
+
+    raise TypeError(
+        "simplm_parametrization.parametrize_inventories must return None or a "
+        f"list of database activities, not {type(result).__name__}."
+    )
+
+
 def _update_metals(
     scenario, version, system_model, use_simplm_parametrization: bool = False
 ):
@@ -1372,9 +1395,9 @@ class Metals(BaseTransformation):
         }
 
         # Call external parametrized model to modify database
-        parametrize_inventories = _load_simplm_parametrize_inventories()
-        parametrize_inventories(fg_db=self.database, iam_data=self.combined_storage)
-
+        self.database = apply_simplm_parametrization(
+            self.database, self.combined_storage
+        )
 
     @staticmethod
     def _select_vars(values, include=(), exclude=()):

@@ -130,6 +130,102 @@ def test_simplm_loader_raises_clear_error_when_optional_package_missing(monkeypa
         metals_module._load_simplm_parametrize_inventories()
 
 
+def test_apply_simplm_parametrization_keeps_in_place_database(monkeypatch):
+    database = []
+    iam_payload = {"scenario": {"year": 2030}}
+    captured = {}
+
+    def fake_parametrize_inventories(**kwargs):
+        captured.update(kwargs)
+        kwargs["fg_db"].append({"name": "added in place"})
+        return None
+
+    monkeypatch.setattr(
+        metals_module,
+        "_load_simplm_parametrize_inventories",
+        lambda: fake_parametrize_inventories,
+    )
+
+    result = metals_module.apply_simplm_parametrization(database, iam_payload)
+
+    assert result is database
+    assert database == [{"name": "added in place"}]
+    assert captured == {"fg_db": database, "iam_data": iam_payload}
+
+
+def test_apply_simplm_parametrization_accepts_returned_database(monkeypatch):
+    database = [{"name": "original"}]
+    returned_database = [{"name": "returned"}]
+    iam_payload = {"scenario": {"year": 2030}}
+
+    def fake_parametrize_inventories(**kwargs):
+        return returned_database
+
+    monkeypatch.setattr(
+        metals_module,
+        "_load_simplm_parametrize_inventories",
+        lambda: fake_parametrize_inventories,
+    )
+
+    result = metals_module.apply_simplm_parametrization(database, iam_payload)
+
+    assert result is returned_database
+
+
+def test_apply_simplm_parametrization_rejects_invalid_return_type(monkeypatch):
+    def fake_parametrize_inventories(**kwargs):
+        return {"database": []}
+
+    monkeypatch.setattr(
+        metals_module,
+        "_load_simplm_parametrize_inventories",
+        lambda: fake_parametrize_inventories,
+    )
+
+    with pytest.raises(TypeError, match="must return None or a list"):
+        metals_module.apply_simplm_parametrization([], {"scenario": {"year": 2030}})
+
+
+def test_apply_iam_driven_inventory_adjustments_assigns_adapter_result(monkeypatch):
+    class DummyGeo:
+        iam_regions = ["World"]
+
+        def iam_to_ecoinvent_location(self, region):
+            return ["GLO", "RoW"]
+
+    metals = object.__new__(Metals)
+    metals.database = [{"name": "original"}]
+    metals.model = "image"
+    metals.scenario = "SSP2-Base"
+    metals.year = 2030
+    metals.geo = DummyGeo()
+    metals.extract_iam_variables = lambda: "iam variables"
+
+    returned_database = [{"name": "returned"}]
+    captured = {}
+
+    def fake_apply_simplm_parametrization(database, iam_payload):
+        captured["database"] = database
+        captured["iam_payload"] = iam_payload
+        return returned_database
+
+    monkeypatch.setattr(
+        metals_module,
+        "apply_simplm_parametrization",
+        fake_apply_simplm_parametrization,
+    )
+
+    metals.apply_iam_driven_inventory_adjustments()
+
+    assert metals.database is returned_database
+    assert captured["database"] == [{"name": "original"}]
+    assert captured["iam_payload"] == {
+        "scenario": {"model": "image", "pathway": "SSP2-Base", "year": 2030},
+        "iam_data": "iam variables",
+        "region_mapping": {"World": ["GLO", "RoW"]},
+    }
+
+
 def test_update_metals_skips_simplm_parametrization_by_default(monkeypatch):
     calls = []
     _patch_update_metals_dependencies(monkeypatch, calls)
