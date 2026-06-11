@@ -48,6 +48,19 @@ class DummyIAMDataCollection:
         return {}
 
 
+def _new_database_for_update_map(use_simplm_parametrization=False):
+    obj = object.__new__(NewDatabase)
+    obj.version = "3.12"
+    obj.system_model = "cutoff"
+    obj.gains_scenario = "CLE"
+    obj.use_absolute_efficiency = False
+    obj.use_simplm_parametrization = use_simplm_parametrization
+    obj.scenarios = []
+    obj.database = None
+    obj._database_is_complete = False
+    return obj
+
+
 def _write_cache_manifest(cache_ref, *shard_files):
     manifest_path = get_cache_manifest_path(cache_ref)
 
@@ -204,6 +217,22 @@ def test_write_db_to_brightway_requires_registered_biosphere(monkeypatch):
         ValueError, match="Brightway export requires a biosphere database"
     ):
         obj.write_db_to_brightway(name=["test-db"])
+
+
+def test_metals_update_defaults_to_simplm_disabled():
+    obj = _new_database_for_update_map()
+
+    obj.update([])
+
+    assert obj.sector_update_methods["metals"]["args"] == ("3.12", "cutoff", False)
+
+
+def test_metals_update_can_enable_simplm_parametrization():
+    obj = _new_database_for_update_map(use_simplm_parametrization=True)
+
+    obj.update([])
+
+    assert obj.sector_update_methods["metals"]["args"] == ("3.12", "cutoff", True)
 
 
 def test_write_db_to_brightway_fast_path_runs_internal_check(monkeypatch):

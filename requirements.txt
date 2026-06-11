@@ -23,3 +23,4 @@ wurst>=0.4
 xarray<=2024.2.0
 tqdm
 unfold
+simplm_parametrization @ git+https://github.com/JonasKlimt/simplm_parametrization.git@main
