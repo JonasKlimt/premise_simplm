@@ -1374,13 +1374,12 @@ class Metals(BaseTransformation):
 
         self.prim_sec_split = load_primary_secondary_split()
 
-    def apply_iam_driven_inventory_adjustments(self):
+    def build_simplm_iam_payload(self):
         """
-        This collects the IAM variables needed to update the metal inventory improvements
-        and calls the external function to update the database.
+        Build the IAM payload consumed by SIMPLM mineral inventory parametrization.
         """
 
-        self.combined_storage = {
+        return {
             "scenario": {
                 "model": self.model,
                 "pathway": self.scenario,
@@ -1393,6 +1392,14 @@ class Metals(BaseTransformation):
             },
             # a variable containing ore grade exctraction curves for each metal should be added here
         }
+
+    def apply_iam_driven_inventory_adjustments(self):
+        """
+        This collects the IAM variables needed to update the metal inventory improvements
+        and calls the external function to update the database.
+        """
+
+        self.combined_storage = self.build_simplm_iam_payload()
 
         # Call external parametrized model to modify database
         self.database = apply_simplm_parametrization(

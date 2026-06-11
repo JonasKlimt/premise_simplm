@@ -186,20 +186,33 @@ def test_apply_simplm_parametrization_rejects_invalid_return_type(monkeypatch):
         metals_module.apply_simplm_parametrization([], {"scenario": {"year": 2030}})
 
 
-def test_apply_iam_driven_inventory_adjustments_reindexes_adapter_result(monkeypatch):
+def test_build_simplm_iam_payload():
     class DummyGeo:
-        iam_regions = ["World"]
+        iam_regions = ["World", "EUR"]
 
         def iam_to_ecoinvent_location(self, region):
-            return ["GLO", "RoW"]
+            return {"World": ["GLO", "RoW"], "EUR": ["RER"]}[region]
 
     metals = object.__new__(Metals)
-    metals.database = [{"name": "original"}]
     metals.model = "image"
     metals.scenario = "SSP2-Base"
     metals.year = 2030
     metals.geo = DummyGeo()
     metals.extract_iam_variables = lambda: "iam variables"
+
+    assert metals.build_simplm_iam_payload() == {
+        "scenario": {"model": "image", "pathway": "SSP2-Base", "year": 2030},
+        "iam_data": "iam variables",
+        "region_mapping": {"World": ["GLO", "RoW"], "EUR": ["RER"]},
+    }
+
+
+def test_apply_iam_driven_inventory_adjustments_reindexes_adapter_result(monkeypatch):
+    metals = object.__new__(Metals)
+    metals.database = [{"name": "original"}]
+    metals.combined_storage = None
+    iam_payload = {"scenario": {"year": 2030}}
+    metals.build_simplm_iam_payload = lambda: iam_payload
 
     returned_database = [{"name": "returned"}]
     captured = {}
@@ -227,11 +240,8 @@ def test_apply_iam_driven_inventory_adjustments_reindexes_adapter_result(monkeyp
     assert metals.database is returned_database
     assert calls == ["apply_simplm_parametrization", "build_db_indexes"]
     assert captured["database"] == [{"name": "original"}]
-    assert captured["iam_payload"] == {
-        "scenario": {"model": "image", "pathway": "SSP2-Base", "year": 2030},
-        "iam_data": "iam variables",
-        "region_mapping": {"World": ["GLO", "RoW"]},
-    }
+    assert captured["iam_payload"] is iam_payload
+    assert metals.combined_storage is iam_payload
 
 
 def test_update_metals_skips_simplm_parametrization_by_default(monkeypatch):
