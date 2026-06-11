@@ -66,7 +66,7 @@ def build_simplm_iam_payload(metals):
             region: metals.geo.iam_to_ecoinvent_location(region)
             for region in metals.geo.iam_regions
         },
-        # a variable containing ore grade exctraction curves for each metal should be added here
+        # a variable containing ore grade extraction curves for each metal should be added here
     }
 
 
