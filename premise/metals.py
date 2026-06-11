@@ -33,9 +33,6 @@ from .transformation import (
 from .utils import DATA_DIR
 from .validation import MetalsValidation
 
-# import external module function to modify mineral raw material inventories
-from simplm_parametrization import parametrize_inventories
-
 logger = create_logger("metal")
 
 NATURAL_RESOURCE_IN_GROUND = ("natural resource", "in ground")
@@ -342,6 +339,20 @@ PURE_PRODUCT_QUALIFIERS = {
 
 class PostAllocationCorrectionError(ValueError):
     """Raised when a metal post-allocation correction cannot be applied safely."""
+
+
+def _load_simplm_parametrize_inventories():
+    try:
+        from simplm_parametrization import parametrize_inventories
+    except ImportError as exc:
+        raise ImportError(
+            "SIMPLM mineral inventory parametrization requires the optional "
+            "'simplm_parametrization' package. Install it before running metals "
+            "updates with use_simplm_parametrization=True, or leave that option "
+            "disabled."
+        ) from exc
+
+    return parametrize_inventories
 
 
 def _update_metals(
@@ -1361,8 +1372,9 @@ class Metals(BaseTransformation):
         }
 
         # Call external parametrized model to modify database
+        parametrize_inventories = _load_simplm_parametrize_inventories()
         parametrize_inventories(fg_db=self.database, iam_data=self.combined_storage)
-        
+
 
     @staticmethod
     def _select_vars(values, include=(), exclude=()):

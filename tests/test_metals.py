@@ -1,3 +1,7 @@
+import builtins
+import sys
+import types
+
 import pytest
 import pandas as pd
 
@@ -94,6 +98,36 @@ def _patch_update_metals_dependencies(monkeypatch, calls):
         "load_mining_shares_mapping",
         lambda: pd.DataFrame({"Metal": ["copper"]}),
     )
+
+
+def test_simplm_loader_returns_parametrize_function_from_optional_package(monkeypatch):
+    module = types.ModuleType("simplm_parametrization")
+
+    def fake_parametrize_inventories(*args, **kwargs):
+        return None
+
+    module.parametrize_inventories = fake_parametrize_inventories
+    monkeypatch.setitem(sys.modules, "simplm_parametrization", module)
+
+    assert (
+        metals_module._load_simplm_parametrize_inventories()
+        is fake_parametrize_inventories
+    )
+
+
+def test_simplm_loader_raises_clear_error_when_optional_package_missing(monkeypatch):
+    real_import = builtins.__import__
+    monkeypatch.delitem(sys.modules, "simplm_parametrization", raising=False)
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "simplm_parametrization":
+            raise ModuleNotFoundError("No module named 'simplm_parametrization'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(ImportError, match="use_simplm_parametrization=True"):
+        metals_module._load_simplm_parametrize_inventories()
 
 
 def test_update_metals_skips_simplm_parametrization_by_default(monkeypatch):
