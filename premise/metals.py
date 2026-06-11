@@ -344,7 +344,9 @@ class PostAllocationCorrectionError(ValueError):
     """Raised when a metal post-allocation correction cannot be applied safely."""
 
 
-def _update_metals(scenario, version, system_model):
+def _update_metals(
+    scenario, version, system_model, use_simplm_parametrization: bool = False
+):
 
     metals = Metals(
         database=scenario["database"],
@@ -359,7 +361,8 @@ def _update_metals(scenario, version, system_model):
     )
 
     metals.create_metal_markets()
-    metals.apply_iam_driven_inventory_adjustments()
+    if use_simplm_parametrization:
+        metals.apply_iam_driven_inventory_adjustments()
     metals.update_metals_use_in_database()
     metals.relink_datasets()
     scenario["database"] = metals.database

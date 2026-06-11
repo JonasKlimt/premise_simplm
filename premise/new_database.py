@@ -568,6 +568,7 @@ class NewDatabase:
         keep_source_db_uncertainty=False,
         gains_scenario="CLE",
         use_absolute_efficiency=False,
+        use_simplm_parametrization=False,
         biosphere_name: str = "biosphere3",
         generate_reports: bool = True,
     ) -> None:
@@ -591,6 +592,7 @@ class NewDatabase:
         :param keep_source_db_uncertainty: whether to keep uncertainty in the source database. Default is False.
         :param gains_scenario: gains scenario to use. Can be either 'CLE' or 'MFR'. Default is 'CLE'.
         :param use_absolute_efficiency: whether to use absolute efficiency values. Default is False.
+        :param use_simplm_parametrization: whether to apply SIMPLM mineral inventory parametrization during metals updates. Default is False.
         :param biosphere_name: name to use for biosphere exchanges during export.
             It must match a biosphere database in the current Brightway project
             only when exporting to Brightway. Default is "biosphere3".
@@ -603,6 +605,7 @@ class NewDatabase:
         self.system_model = check_system_model(system_model)
         self.system_model_args = system_args
         self.use_absolute_efficiency = use_absolute_efficiency
+        self.use_simplm_parametrization = use_simplm_parametrization
         self.keep_imports_uncertainty = keep_imports_uncertainty
         self.keep_source_db_uncertainty = keep_source_db_uncertainty
         self.biosphere_name = biosphere_name
@@ -1124,7 +1127,11 @@ class NewDatabase:
             },
             "metals": {
                 "func": _update_metals,
-                "args": (self.version, self.system_model),
+                "args": (
+                    self.version,
+                    self.system_model,
+                    self.use_simplm_parametrization,
+                ),
             },
             "mining": {
                 "func": _update_mining,

@@ -13,6 +13,7 @@ from .new_database import (
     _update_emissions,
     _update_vehicles,
     _update_external_scenarios,
+    _update_metals,
 )
 from .utils import dump_database, load_database
 from copy import copy
@@ -67,6 +68,14 @@ class IncrementalDatabase(NewDatabase):
             "battery": {
                 "func": _update_battery,
                 "args": (self.version, self.system_model),
+            },
+            "metals": {
+                "func": _update_metals,
+                "args": (
+                    self.version,
+                    self.system_model,
+                    self.use_simplm_parametrization,
+                ),
             },
             "emissions": {
                 "func": _update_emissions,

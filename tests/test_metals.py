@@ -1,9 +1,11 @@
 import pytest
 import pandas as pd
 
+import premise.metals as metals_module
 from premise.metals import (
     Metals,
     PostAllocationCorrectionError,
+    _update_metals,
     correct_metal_resource_exchanges,
     extract_reference_products_from_filter,
     is_secondary_metal_supply_exchange,
@@ -39,6 +41,91 @@ def technosphere_exchange(name, product, location, amount, unit="kilogram"):
         "unit": unit,
         "type": "technosphere",
     }
+
+
+class DummyIAMData:
+    regions = ["World"]
+
+
+class DummyMetalsValidation:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def run_metals_checks(self):
+        pass
+
+
+def _scenario_for_update_metals():
+    return {
+        "database": [],
+        "model": "image",
+        "pathway": "SSP2-Base",
+        "iam data": DummyIAMData(),
+        "year": 2030,
+    }
+
+
+def _patch_update_metals_dependencies(monkeypatch, calls):
+    class DummyMetals:
+        def __init__(self, **kwargs):
+            self.database = kwargs["database"]
+            self.cache = kwargs.get("cache")
+            self.index = kwargs.get("index")
+            self.system_model = kwargs["system_model"]
+            self.version = kwargs["version"]
+            self.prim_sec_split = {}
+
+        def create_metal_markets(self):
+            calls.append("create_metal_markets")
+
+        def apply_iam_driven_inventory_adjustments(self):
+            calls.append("apply_iam_driven_inventory_adjustments")
+
+        def update_metals_use_in_database(self):
+            calls.append("update_metals_use_in_database")
+
+        def relink_datasets(self):
+            calls.append("relink_datasets")
+
+    monkeypatch.setattr(metals_module, "Metals", DummyMetals)
+    monkeypatch.setattr(metals_module, "MetalsValidation", DummyMetalsValidation)
+    monkeypatch.setattr(
+        metals_module,
+        "load_mining_shares_mapping",
+        lambda: pd.DataFrame({"Metal": ["copper"]}),
+    )
+
+
+def test_update_metals_skips_simplm_parametrization_by_default(monkeypatch):
+    calls = []
+    _patch_update_metals_dependencies(monkeypatch, calls)
+
+    _update_metals(_scenario_for_update_metals(), "3.12", "cutoff")
+
+    assert calls == [
+        "create_metal_markets",
+        "update_metals_use_in_database",
+        "relink_datasets",
+    ]
+
+
+def test_update_metals_runs_simplm_parametrization_when_enabled(monkeypatch):
+    calls = []
+    _patch_update_metals_dependencies(monkeypatch, calls)
+
+    _update_metals(
+        _scenario_for_update_metals(),
+        "3.12",
+        "cutoff",
+        use_simplm_parametrization=True,
+    )
+
+    assert calls == [
+        "create_metal_markets",
+        "apply_iam_driven_inventory_adjustments",
+        "update_metals_use_in_database",
+        "relink_datasets",
+    ]
 
 
 def test_extract_reference_products_from_filter_handles_either_expression():
