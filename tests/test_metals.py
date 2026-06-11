@@ -2,8 +2,9 @@ import builtins
 import sys
 import types
 
-import pytest
+import numpy as np
 import pandas as pd
+import pytest
 
 import premise.metals as metals_module
 from premise.metals import (
@@ -44,6 +45,33 @@ def technosphere_exchange(name, product, location, amount, unit="kilogram"):
         "amount": amount,
         "unit": unit,
         "type": "technosphere",
+    }
+
+
+def _real_xarray():
+    xr = pytest.importorskip("xarray")
+    if getattr(xr.DataArray, "__module__", "") == "builtins":
+        pytest.skip("real xarray is required for this test")
+    return xr
+
+
+def _iam_array(variables, years, values_by_variable, region="World"):
+    xr = _real_xarray()
+    data = np.array(
+        [[values_by_variable[variable] for variable in variables]],
+        dtype=float,
+    )
+    return xr.DataArray(
+        data,
+        dims=("region", "variables", "year"),
+        coords={"region": [region], "variables": variables, "year": years},
+    )
+
+
+def _values_by_variable(data_array, region="World"):
+    return {
+        str(variable): float(data_array.sel(variables=variable, region=region).values)
+        for variable in data_array.coords["variables"].values
     }
 
 
@@ -204,6 +232,107 @@ def test_build_simplm_iam_payload():
         "scenario": {"model": "image", "pathway": "SSP2-Base", "year": 2030},
         "iam_data": "iam variables",
         "region_mapping": {"World": ["GLO", "RoW"], "EUR": ["RER"]},
+    }
+
+
+def test_extract_iam_variables_interpolates_target_year():
+    final_energy_vars = [
+        "Industry - Other - Elec",
+        "Industry - Other - H2",
+        "Industry - Other - Solid Biomass",
+        "Industry - Other - Solid Coal",
+    ]
+    iam_data = types.SimpleNamespace(
+        steel_technology_efficiencies=_iam_array(
+            ["steel - primary - BF/BOF"],
+            [2020, 2030],
+            {"steel - primary - BF/BOF": [1.0, 1.2]},
+        ),
+        electricity_mix=_iam_array(
+            ["Wind Onshore", "Wind Offshore", "Solar CSP"],
+            [2020, 2030],
+            {
+                "Wind Onshore": [0.1, 0.2],
+                "Wind Offshore": [0.1, 0.1],
+                "Solar CSP": [0.0, 0.1],
+            },
+        ),
+        road_freight_fleet=_iam_array(
+            [
+                "truck, battery electric, 40 metric ton",
+                "truck, diesel, 40 metric ton",
+            ],
+            [2020, 2030],
+            {
+                "truck, battery electric, 40 metric ton": [0.0, 40.0],
+                "truck, diesel, 40 metric ton": [100.0, 60.0],
+            },
+        ),
+        final_energy_use=_iam_array(
+            final_energy_vars,
+            [2020, 2030],
+            {
+                "Industry - Other - Elec": [20.0, 40.0],
+                "Industry - Other - H2": [1.0, 9.0],
+                "Industry - Other - Solid Biomass": [10.0, 20.0],
+                "Industry - Other - Solid Coal": [69.0, 31.0],
+            },
+        ),
+    )
+    metals = object.__new__(Metals)
+    metals.iam_data = iam_data
+    metals.year = 2025
+
+    values = _values_by_variable(metals.extract_iam_variables())
+
+    assert values == {
+        "Steel BF/BOF efficiency": pytest.approx(1 - (1 / 1.1)),
+        "Wind and PV renewable shares in electricity mix": pytest.approx(0.3),
+        "Electric truck share (highest weight class)": pytest.approx(0.2),
+        "Electricity share other industry": pytest.approx(0.1),
+        "Hydrogen share other industry": pytest.approx(0.04),
+        "Solid biomass share other industry": pytest.approx(
+            (15 / (15 + 50)) - (10 / (10 + 69))
+        ),
+    }
+
+
+def test_extract_iam_variables_uses_zero_for_missing_optional_variables():
+    iam_data = types.SimpleNamespace(
+        steel_technology_efficiencies=_iam_array(
+            ["other steel"],
+            [2020, 2030],
+            {"other steel": [1.0, 1.0]},
+        ),
+        electricity_mix=_iam_array(
+            ["Hydro"],
+            [2020, 2030],
+            {"Hydro": [0.5, 0.5]},
+        ),
+        road_freight_fleet=_iam_array(
+            ["truck, diesel, 20 metric ton"],
+            [2020, 2030],
+            {"truck, diesel, 20 metric ton": [1.0, 1.0]},
+        ),
+        final_energy_use=_iam_array(
+            ["Industry - Buildings - Elec"],
+            [2020, 2030],
+            {"Industry - Buildings - Elec": [1.0, 1.0]},
+        ),
+    )
+    metals = object.__new__(Metals)
+    metals.iam_data = iam_data
+    metals.year = 2025
+
+    values = _values_by_variable(metals.extract_iam_variables())
+
+    assert values == {
+        "Steel BF/BOF efficiency": 0.0,
+        "Wind and PV renewable shares in electricity mix": 0.0,
+        "Electric truck share (highest weight class)": 0.0,
+        "Electricity share other industry": 0.0,
+        "Hydrogen share other industry": 0.0,
+        "Solid biomass share other industry": 0.0,
     }
 
 

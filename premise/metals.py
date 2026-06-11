@@ -1417,14 +1417,100 @@ class Metals(BaseTransformation):
         ]
 
     @staticmethod
-    def _share(data, year, num_var, den_vars):
-        selected = data.sel(year=year)
-        denominator = selected.sel(variables=den_vars).sum("variables")
-        return xr.where(denominator > 0, selected.sel(variables=num_var) / denominator, 0.0)
+    def _as_list(value):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return list(value)
 
-    def _share_change(self, data, target_year, base_year, num_var, den_vars):
-        target_share = self._share(data, target_year, num_var, den_vars)
-        base_share = self._share(data, base_year, num_var, den_vars)
+    @staticmethod
+    def _available_vars(data, variables):
+        requested = Metals._as_list(variables)
+        if "variables" not in data.coords:
+            return []
+
+        available = {str(v) for v in data.coords["variables"].values}
+        return [v for v in requested if str(v) in available]
+
+    @staticmethod
+    def _select_year(data, year):
+        if "year" not in data.coords:
+            return data
+
+        years = data.coords["year"].values.tolist()
+        if year in years:
+            return data.sel(year=year)
+
+        return data.interp(year=year)
+
+    @staticmethod
+    def _zero_like_year(data, year):
+        selected = Metals._select_year(data, year)
+        if "variables" in selected.dims:
+            return selected.sum("variables") * 0
+        return selected * 0
+
+    @staticmethod
+    def _select_var_or_zero(data, year, variable, label=None):
+        if variable not in Metals._available_vars(data, [variable]):
+            logger.warning(
+                "IAM variable '%s' missing for %s; using zero.",
+                variable,
+                label or variable,
+            )
+            return Metals._zero_like_year(data, year)
+
+        return (
+            Metals._select_year(data, year)
+            .sel(variables=variable)
+            .squeeze(drop=True)
+        )
+
+    @staticmethod
+    def _sum_vars_or_zero(data, year, variables, label):
+        available_vars = Metals._available_vars(data, variables)
+        if not available_vars:
+            logger.warning(
+                "No IAM variables available for %s; using zero.",
+                label,
+            )
+            return Metals._zero_like_year(data, year)
+
+        return (
+            Metals._select_year(data, year)
+            .sel(variables=available_vars)
+            .sum("variables")
+        )
+
+    @staticmethod
+    def _share(data, year, num_var, den_vars, label=None):
+        available_den_vars = Metals._available_vars(data, den_vars)
+        if not available_den_vars:
+            logger.warning(
+                "No denominator IAM variables available for %s; using zero.",
+                label or num_var,
+            )
+            return Metals._zero_like_year(data, year)
+
+        if num_var not in Metals._available_vars(data, [num_var]):
+            logger.warning(
+                "IAM variable '%s' missing for %s; using zero.",
+                num_var,
+                label or num_var,
+            )
+            return Metals._zero_like_year(data, year)
+
+        selected = Metals._select_year(data, year)
+        denominator = selected.sel(variables=available_den_vars).sum("variables")
+        numerator = selected.sel(variables=num_var)
+        return xr.where(denominator > 0, numerator / denominator, 0.0)
+
+    def _share_change(
+        self, data, target_year, base_year, num_var, den_vars, label=None
+    ):
+        target_share = self._share(data, target_year, num_var, den_vars, label=label)
+        base_share = self._share(data, base_year, num_var, den_vars, label=label)
         return xr.where(base_share > 0, target_share - base_share, 0.0)
 
     def extract_iam_variables(self):
@@ -1437,21 +1523,24 @@ class Metals(BaseTransformation):
         base_year = 2020
 
         # Steel BOF/BF efficiencies
-        steel_raw = (
-            self.iam_data.steel_technology_efficiencies
-            .sel(variables="steel - primary - BF/BOF", year=target_year)
-            .squeeze(drop=True)
+        steel_raw = self._select_var_or_zero(
+            self.iam_data.steel_technology_efficiencies,
+            target_year,
+            "steel - primary - BF/BOF",
+            label="Steel BF/BOF efficiency",
         )
         steel = xr.where(steel_raw > 0, 1 - (1 / steel_raw), 0.0).assign_coords(
             variables="Steel BF/BOF efficiency"
         )
 
         # Wind and solar shares in electricity mix
-        renewables = (
-            self.iam_data.electricity_mix
-            .sel(year=target_year, variables=["Wind Onshore", "Wind Offshore", "Solar CSP"])
-            .sum("variables")
-            .assign_coords(variables="Wind and PV renewable shares in electricity mix")
+        renewables = self._sum_vars_or_zero(
+            self.iam_data.electricity_mix,
+            target_year,
+            ["Wind Onshore", "Wind Offshore", "Solar CSP"],
+            label="Wind and PV renewable shares in electricity mix",
+        ).assign_coords(
+            variables="Wind and PV renewable shares in electricity mix"
         )
 
         # Electric truck share in road freight, for the highest weight class available (currently 40t)
@@ -1465,6 +1554,7 @@ class Metals(BaseTransformation):
             target_year,
             "truck, battery electric, 40 metric ton",
             vars_40t,
+            label="Electric truck share (highest weight class)",
         ).assign_coords(variables="Electric truck share (highest weight class)")
 
         # Changes in electricity and hydrogen shares of final energy use in other industry sectors
@@ -1481,6 +1571,7 @@ class Metals(BaseTransformation):
             base_year,
             "Industry - Other - Elec",
             other_industry_vars,
+            label="Electricity share other industry",
         ).assign_coords(variables="Electricity share other industry")
 
         h2_change = self._share_change(
@@ -1489,6 +1580,7 @@ class Metals(BaseTransformation):
             base_year,
             "Industry - Other - H2",
             other_industry_vars,
+            label="Hydrogen share other industry",
         ).assign_coords(variables="Hydrogen share other industry")
 
         # Changes in solid biomass share of solid final energy use in other industry sectors
@@ -1502,16 +1594,18 @@ class Metals(BaseTransformation):
             target_year,
             "Industry - Other - Solid Biomass",
             solid_vars,
+            label="Solid biomass share other industry",
         )
         bio_base = self._share(
             final_energy,
             base_year,
             "Industry - Other - Solid Biomass",
             solid_vars,
+            label="Solid biomass share other industry",
         )
-        biomass_change = xr.where(bio_target > bio_base, bio_target - bio_base, 0.0).assign_coords(
-            variables="Solid biomass share other industry"
-        )
+        biomass_change = xr.where(
+            bio_target > bio_base, bio_target - bio_base, 0.0
+        ).assign_coords(variables="Solid biomass share other industry")
 
         arrays = [steel, renewables, fleet_share, elec_change, h2_change, biomass_change]
 
